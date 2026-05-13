@@ -59,10 +59,11 @@ sudo resize2fs /dev/md0
 ```
 at this point `df /mnt` will report the capacity being increased.
 
-## chunks and stripes explained
+## Chunks and stripes explained
 A chunk is the least amount of data considered by RAID. Chunks on the disks are aligned at multiples of the chunk size. A stripe is all the data represented by the chunks at the same offset of all the participating drives.
-## reshaping: under the hood
-first of all, let's remember: we are reshaping a RAID array while the underlying fs is still mounted, applications can still read/write and the operation happening below should be invisible (apart from latency). Now. When we're in the middle of the reshaping there will be a portion of the array where the reshaping has already happened, and therefore can be read/written with the new geometry in mind. This area is before `suspend_lo` as per the [official documentation](https://github.com/torvalds/linux/blob/master/Documentation/admin-guide/md.rst). Also, there's a portion which hasn't been reshaped yet, and this portion of the disk (above `suspend_hi`) is safe to be read/written as per the old geometry.
+
+## Reshaping: under the hood
+First of all, let's remember: we are reshaping a RAID array while the underlying fs is still mounted, applications can still read/write and the operation happening below should be invisible (apart from latency). Now. When we're in the middle of the reshaping there will be a portion of the array where the reshaping has already happened, and therefore can be read/written with the new geometry in mind. This area is before `suspend_lo` as per the [official documentation](https://github.com/torvalds/linux/blob/master/Documentation/admin-guide/md.rst). Also, there's a portion which hasn't been reshaped yet, and this portion of the disk (above `suspend_hi`) is safe to be read/written as per the old geometry.
 
 If the array is accessed in the in-between range, the operation will be blocked until the reshaping is done for the relevant portion of the array. All that will cause is some latency in IO. So overall, you're free to use your array during the reshaping. Technically there's a third value at play here as well: `reshape position` telling exactly up until which point in the array the new geometry should be considered. This value obviously cannot be outside the range discussed earlier. (In case of RAID0 slightly different mechanics are used, meaning the suspend_ values are omitted completely.)
 
@@ -74,7 +75,7 @@ But early during the reshaping process chunks to be written and chunks to be rea
 
 In essence early during reshape in case of a system crash there would be an uncertainty whether we have the old data in place, or the new one. This uncertainty is cleared up by the backup file: in case of a system crash we need to be able to restore to a known state and resume reshaping from there. That's what the backup data is for.
 
-But in the scenario I'm in something even more clever happened: this is what I've seen mid-reshape:
+But in the scenario I'm in, something even more clever happened: this is what I've seen mid-reshape:
 ```
 $ sudo mdadm --examine /dev/sdb1
 [...]
@@ -95,7 +96,7 @@ echo 10 | sudo tee /sys/block/md0/md/sync_speed_max
 ```
 this limits the syncing to 10 kibibytes per second. Choosing such a small number only makes sense if you want to have enough time to inspect a small array during reshaping.
 
-## reshaping from RAID5 to RAID6
+## Reshaping from RAID5 to RAID6
 Losing two disks is less probable than losing one, and RAID6 protects against two disk failures, so now we're reshaping from RAID5 to RAID6 by adding a new drive. So we're going from RAID5 with four drives to RAID6 with five drives, more redundancy, usable capacity won't change:
 ```
 sudo parted /dev/sdf --script mklabel gpt mkpart primary 1MiB 100% set 1 raid on
@@ -113,7 +114,7 @@ But I'm not satisfied, I want to see the backup file, hopefully changing the chu
 sudo mdadm --grow /dev/md0 --chunk=256 --backup-file=/root/md0-reshape.bak
 ```
 the backup file contains a safe backup/resume point from where the system is able to continue reshaping. That means: the file should be available after reboot without `md0` being online. My `/root` directory here survives reboots, and is outside `md0`, so it's a safe place for the backup.
-when examining the drives you'll see something like this:
+When examining the drives you'll see something like this:
 ```
   Reshape pos'n : 39936 (39.00 MiB 40.89 MB)
   New Chunksize : 256K
@@ -137,7 +138,7 @@ sudo umount /mnt
 sudo e2fsck -f /dev/md0
 sudo resize2fs -M /dev/md0
 ```
-now at this step the ext2 fs was larger than the theoretical capacity of the reduced array, which I don't understand, given we started with 2+1 drives, and we're reducing to 2+2 drives, maybe resize2fs made metadata to grow, and now it doesn't want to shrink it back, but anyhow I just recreated the test data with smaller size
+now at this step the ext4 fs was larger than the theoretical capacity of the reduced array, which I don't understand, given we started with 2+1 drives, and we're reducing to 2+2 drives, maybe resize2fs made metadata to grow, and now it doesn't want to shrink it back, but anyhow I just recreated the test data with smaller size
 ```
 $ sudo mdadm --grow /dev/md0 --raid-devices=4 --backup-file=/root/md0-reshape.bak
 mdadm: this change will reduce the size of the array.
@@ -155,7 +156,8 @@ mdadm: Need to backup 768K of critical section..
 ```
 so in this case we know for sure the backup file is used this time, and we couldn't have gotten away without it. The backup file is safe to delete when the reshaping is done (as reported by `cat /proc/mdstat`).
 
-## things I'd do differently in production
+## Things I'd do differently in production
 Given that I worked with virtual HDDs there was no point in doing SMART tests, but with real physical hardware it would be wise to do a full SMART test on each drive before doing anything. Also, given the fact that reshaping took place in minutes after creation, I was confident that the array has no latent issues yet. In production, you'd rarely reshape an array minutes after its creation. I'd want to scrub after the SMART tests are done. If there's anything surfacing during SMART tests or scrubbing, the array is still in a known good state, much easier to deal with it now than during (or after) reshaping.
+
 # What did we learn?
 We learned that in modern linux the backup file is superfluous in most of the cases. We've also seen a case where the lack of backup file was accepted, but reshaping stalled when the array was online. Therefore we learned that even if it might be unnecessary, having that file won't hurt. We learned that mdadm in some cases is able to do some clever tricks to avoid the necessity of backing up at all, in other cases the backup data is hidden away in unused portions of the underlying partitions. And we've seen that during shrinking the presence of a backup file is strictly necessary. Overall we've seen how mdadm makes reshape crash-safe across a variety of cases, sometimes via the backup file, sometimes by cleverer mechanisms that avoid needing one.
