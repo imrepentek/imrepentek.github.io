@@ -2,7 +2,7 @@
 layout: post
 title: "The mdadm backup file: when it's needed, and when it isn't"
 description: "A close look at what mdadm's --backup-file does during a RAID reshape: when it's required, when it's optional, and what happens if you lose it mid-operation."
-date: 2026-05-13 18:00:00 +0200
+date: 2026-05-12 18:00:00 +0200
 tags: [linux, storage, mdadm, raid]
 ---
 
